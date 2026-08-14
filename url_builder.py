@@ -6,25 +6,19 @@ class JobUrlBuilder:
         self.location = location
 
     def build_linkedin_url(self):
-        """Generates public LinkedIn search URL filtered for the last 24 hours (86400 seconds)."""
+        """Generates public LinkedIn search URL filtered for the last 24 hours."""
         encoded_keywords = urllib.parse.quote(self.keywords)
         encoded_location = urllib.parse.quote(self.location)
-        
-        # f_TPR=r86400 filters jobs posted in past 24 hrs
         return f"https://www.linkedin.com/jobs/search/?keywords={encoded_keywords}&location={encoded_location}&f_TPR=r86400"
 
-    def build_naukri_url(self):
-        """Generates public Naukri search URL filtered for 1-day freshness."""
-        # Convert 'Embedded Firmware' -> 'embedded-firmware' for Naukri URL structure
-        formatted_keywords = self.keywords.lower().replace(" ", "-")
-        formatted_location = self.location.lower().replace(" ", "-")
-        
-        # freshness=1 filters for jobs posted today/past 24h
-        return f"https://www.naukri.com/{formatted_keywords}-jobs-in-{formatted_location}?freshness=1"
+    def build_linkedin_posts_url(self):
+        """Generates LinkedIn public post search URL for hiring posts."""
+        query = f"{self.keywords} hiring {self.location}"
+        encoded_query = urllib.parse.quote(query)
+        return f"https://www.linkedin.com/search/results/content/?keywords={encoded_query}&sortBy=%22date_posted%22"
 
 
 if __name__ == "__main__":
-    # Quick test of our URL builder
     builder = JobUrlBuilder(keywords="Embedded Firmware", location="India")
-    print("LinkedIn Target URL:\n", builder.build_linkedin_url())
-    print("\nNaukri Target URL:\n", builder.build_naukri_url())
+    print("LinkedIn Jobs URL:\n", builder.build_linkedin_url())
+    print("\nLinkedIn Posts URL:\n", builder.build_linkedin_posts_url())
