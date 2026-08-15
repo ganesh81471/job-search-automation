@@ -46,15 +46,30 @@ def init_db():
             company TEXT NOT NULL,
             location TEXT,
             link TEXT UNIQUE NOT NULL,
-            score INTEGER DEFAULT 0,
-            experience_verdict TEXT DEFAULT 'UNKNOWN',
-            experience_reason TEXT DEFAULT '',
-            min_years INTEGER,
-            max_years INTEGER,
             status TEXT DEFAULT 'NEW',
             date_found TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    conn.commit()
+
+    # --- Auto-migration: add any columns this version needs that an older
+    # jobs.db (from before this update) won't have yet. CREATE TABLE IF NOT
+    # EXISTS only fires on a brand-new file — it does nothing to a table that
+    # already exists, which is exactly what broke on your run. This makes
+    # future schema changes safe too, not just this one. ---
+    required_columns = {
+        "score": "INTEGER DEFAULT 0",
+        "experience_verdict": "TEXT DEFAULT 'UNKNOWN'",
+        "experience_reason": "TEXT DEFAULT ''",
+        "min_years": "INTEGER",
+        "max_years": "INTEGER",
+    }
+    cursor.execute("PRAGMA table_info(jobs)")
+    existing_columns = {row[1] for row in cursor.fetchall()}
+    for col_name, col_def in required_columns.items():
+        if col_name not in existing_columns:
+            print(f"[migrate] Adding missing column '{col_name}' to jobs table...")
+            cursor.execute(f"ALTER TABLE jobs ADD COLUMN {col_name} {col_def}")
     conn.commit()
     conn.close()
 
@@ -119,20 +134,39 @@ def save_jobs(job_list, source_name, min_domain_score=50, allow_stretch=True):
     return added_count, rejected_senior, rejected_domain
 
 
-def get_all_jobs(status_filter=None, verdict_filter=None):
+def get_all_jobs(status_filter=None, verdict_filter=None, search_text=None, sort_by="score"):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     query = """SELECT id, source, title, company, location, link, score,
-                      experience_verdict, experience_reason, status
+                      experience_verdict, experience_reason, status,
+                      min_years, max_years, date_found
                FROM jobs WHERE 1=1"""
     params = []
-    if status_filter and status_filter != "ALL":
+
+    if status_filter and status_filter == "ALL":
+        # "ALL" means all *active* jobs — discarded ones are hidden unless
+        # explicitly requested, so they don't clutter the main view forever.
+        query += " AND status != 'DISCARDED'"
+    elif status_filter and status_filter != "ALL_INCLUDING_DISCARDED":
         query += " AND status = ?"
         params.append(status_filter)
+
     if verdict_filter and verdict_filter != "ALL":
         query += " AND experience_verdict = ?"
         params.append(verdict_filter)
-    query += " ORDER BY score DESC, id DESC"
+
+    if search_text:
+        query += " AND (title LIKE ? OR company LIKE ?)"
+        like = f"%{search_text}%"
+        params.extend([like, like])
+
+    sort_map = {
+        "score": "score DESC, id DESC",
+        "newest": "date_found DESC",
+        "company": "company ASC",
+    }
+    query += f" ORDER BY {sort_map.get(sort_by, 'score DESC, id DESC')}"
+
     cursor.execute(query, params)
     rows = cursor.fetchall()
     conn.close()
@@ -145,6 +179,34 @@ def update_job_status(job_id, new_status):
     cursor.execute("UPDATE jobs SET status = ? WHERE id = ?", (new_status, job_id))
     conn.commit()
     conn.close()
+
+
+def get_stats():
+    """Summary counts for the dashboard header — total, by status, by
+    experience verdict, and per-source breakdown so you can actually see
+    whether a source is contributing anything or silently failing."""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT COUNT(*) FROM jobs")
+    total = cursor.fetchone()[0]
+
+    cursor.execute("SELECT status, COUNT(*) FROM jobs GROUP BY status")
+    by_status = dict(cursor.fetchall())
+
+    cursor.execute("SELECT experience_verdict, COUNT(*) FROM jobs GROUP BY experience_verdict")
+    by_verdict = dict(cursor.fetchall())
+
+    cursor.execute("SELECT source, COUNT(*) FROM jobs GROUP BY source ORDER BY COUNT(*) DESC")
+    by_source = cursor.fetchall()
+
+    conn.close()
+    return {
+        "total": total,
+        "by_status": by_status,
+        "by_verdict": by_verdict,
+        "by_source": by_source,
+    }
 
 
 if __name__ == "__main__":
