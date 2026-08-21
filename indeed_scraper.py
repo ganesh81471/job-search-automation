@@ -49,6 +49,17 @@ async def scrape_indeed_jobs(keywords="Embedded Firmware Engineer", location="Be
         # Indeed's markup changes fairly often — this selector may need updating.
         cards = soup.find_all("div", class_="job_seen_beacon")
 
+        if not cards or all(
+            not c.find("h2", class_="jobTitle") for c in cards
+        ):
+            debug_path = f"debug_indeed_{location}.html"
+            with open(debug_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            print(f"    [!] Indeed selectors found nothing usable — dumped raw response "
+                  f"to {debug_path}. Open it in a browser: if it shows real job listings, "
+                  f"our CSS selectors are stale. If it shows a CAPTCHA/'verify you're human' "
+                  f"page, Indeed is blocking the scraper and selectors won't fix it.")
+
         jobs = []
         for card in cards:
             title_tag = card.find("h2", class_="jobTitle")

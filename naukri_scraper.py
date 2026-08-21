@@ -51,6 +51,14 @@ async def scrape_naukri_jobs(keywords="Embedded Firmware Engineer", location="Be
         # If this returns 0 jobs, inspect the page manually and update the selector.
         cards = soup.find_all("div", class_="cust-job-tuple")
 
+        if not cards:
+            debug_path = f"debug_naukri_{location}.html"
+            with open(debug_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            print(f"    [!] Naukri found 0 job cards — dumped raw response to {debug_path}. "
+                  f"Open it in a browser: real listings with different markup means stale "
+                  f"selectors; a CAPTCHA/block page means Naukri is blocking the scraper.")
+
         jobs = []
         for card in cards:
             title_tag = card.find("a", class_="title")

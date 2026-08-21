@@ -4,7 +4,7 @@ from experience_filter import classify_experience
 
 DB_NAME = "jobs.db"
 
-# Resume Skills Baseline for Keyword Matching
+# Resume Skills Baseline for Keyword Matching — embedded/hardware track
 RESUME_KEYWORDS = [
     "esp32", "esp-idf", "stm32", "stm32cubeide", "microcontroller", "mcu", "firmware", "embedded",
     "embedded c", "c++", "cpp", "c/c++", "python",
@@ -15,19 +15,30 @@ RESUME_KEYWORDS = [
     "pcb", "kicad", "schematic", "layout", "prototyping",
 ]
 
+# Python/automation track — separate list since these roles won't mention
+# embedded-specific terms at all, and shouldn't be penalized for that.
+AUTOMATION_KEYWORDS = [
+    "python", "automation", "playwright", "selenium", "pytest", "test automation",
+    "qa automation", "sqlite", "sql", "streamlit", "api", "rest api", "scripting",
+    "web scraping", "etl", "pipeline", "ci/cd", "git", "linux", "bash", "cron",
+    "scheduler", "data pipeline", "flask", "django", "pandas",
+]
+
 CORE_DOMAIN_TERMS = ["embedded", "firmware", "esp32", "stm32", "c++", "c/c++", "iot"]
+CORE_AUTOMATION_TERMS = ["automation", "python developer", "test automation", "qa automation", "sdet"]
 
 
-def calculate_domain_score(text):
-    """Keyword-overlap score against the resume skill list. This measures
-    DOMAIN relevance only (is this an embedded/firmware-ish job at all) —
-    it is NOT a seniority judgment. Seniority is handled separately by
-    experience_filter.classify_experience()."""
+def calculate_domain_score(text, track="embedded"):
+    """Keyword-overlap score against the relevant skill list for the given
+    track. This measures DOMAIN relevance only (is this an embedded/firmware
+    job, or a python/automation job) — it is NOT a seniority judgment.
+    Seniority is handled separately by experience_filter.classify_experience()."""
     if not text:
         return 0
     text_lower = text.lower()
+    keyword_list = AUTOMATION_KEYWORDS if track == "automation" else RESUME_KEYWORDS
     matched = sum(
-        1 for kw in RESUME_KEYWORDS
+        1 for kw in keyword_list
         if re.search(r"\b" + re.escape(kw) + r"\b", text_lower)
     )
     # Slightly gentler denominator than before (was /4.0, maxed out too easily)
@@ -74,7 +85,7 @@ def init_db():
     conn.close()
 
 
-def save_jobs(job_list, source_name, min_domain_score=50, allow_stretch=True):
+def save_jobs(job_list, source_name, min_domain_score=50, allow_stretch=False, track="embedded"):
     """
     Saves jobs that are BOTH domain-relevant AND experience-appropriate.
 
@@ -82,13 +93,19 @@ def save_jobs(job_list, source_name, min_domain_score=50, allow_stretch=True):
       title, company, location, link, description (full JD text),
       seniority_label (LinkedIn's own tag, if scraped)
 
-    Returns (added_count, rejected_senior_count, rejected_domain_count)
+    track: "embedded" or "automation" — picks which keyword list domain
+    scoring uses. A Python/automation job shouldn't be penalized for not
+    mentioning ESP32.
+
+    Returns (added_count, rejected_senior_count, rejected_unverified_count, rejected_domain_count)
     """
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     added_count = 0
-    rejected_senior = 0
+    rejected_senior = 0       # confirmed 2+ yrs or senior-worded title
+    rejected_unverified = 0   # no clear signal either way, blocked by strict mode
     rejected_domain = 0
+    core_terms = CORE_AUTOMATION_TERMS if track == "automation" else CORE_DOMAIN_TERMS
 
     for job in job_list:
         title = job.get("title", "")
@@ -97,8 +114,8 @@ def save_jobs(job_list, source_name, min_domain_score=50, allow_stretch=True):
         seniority_label = job.get("seniority_label")
 
         combined_text = f"{title} {company} {description}"
-        domain_score = calculate_domain_score(combined_text)
-        if any(term in combined_text.lower() for term in CORE_DOMAIN_TERMS):
+        domain_score = calculate_domain_score(combined_text, track=track)
+        if any(term in combined_text.lower() for term in core_terms):
             domain_score = max(domain_score, 70)
 
         if domain_score < min_domain_score:
@@ -111,7 +128,7 @@ def save_jobs(job_list, source_name, min_domain_score=50, allow_stretch=True):
             rejected_senior += 1
             continue
         if exp["verdict"] == "STRETCH" and not allow_stretch:
-            rejected_senior += 1
+            rejected_unverified += 1
             continue
 
         try:
@@ -131,7 +148,7 @@ def save_jobs(job_list, source_name, min_domain_score=50, allow_stretch=True):
 
     conn.commit()
     conn.close()
-    return added_count, rejected_senior, rejected_domain
+    return added_count, rejected_senior, rejected_unverified, rejected_domain
 
 
 def get_all_jobs(status_filter=None, verdict_filter=None, search_text=None, sort_by="score"):

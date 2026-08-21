@@ -36,6 +36,18 @@ _FRESHER_WORDS = re.compile(
     re.IGNORECASE,
 )
 
+# If the TITLE itself says senior/staff/principal/lead/etc, that's a strong,
+# always-available signal — it doesn't depend on the description scrape
+# succeeding at all. This catches cases like "Sr. Embedded Firmware Engineer"
+# even when LinkedIn's guest view returns a thin/truncated description with
+# no explicit year number in it (which is common — full JDs are often
+# behind a login wall for non-members).
+_SENIOR_TITLE_WORDS = re.compile(
+    r"\b(senior|sr\.?|staff|principal|principle|lead|director|architect|"
+    r"head of|manager|advanced|expert)\b",
+    re.IGNORECASE,
+)
+
 # LinkedIn's own criteria field, when we have it from the job detail page
 _SENIOR_SENIORITY_LABELS = {"mid-senior level", "director", "executive", "associate"}
 _JUNIOR_SENIORITY_LABELS = {"internship", "entry level"}
@@ -77,13 +89,17 @@ def classify_experience(description_text: str, seniority_label: str = None, titl
     min_years, max_years = _extract_year_bounds(text)
 
     # 1) Explicit year requirement is the strongest signal — trust it first.
+    # STRICT 0-1 yr mode: both floor AND ceiling must be within range. A
+    # "0-2 years" posting used to pass because the floor (0) qualified —
+    # now the ceiling (2) correctly rejects it, since you asked for
+    # strictly 0-1, not "0 or more, up to whatever."
     if min_years is not None:
-        if min_years <= 2:
+        if min_years <= 1 and max_years <= 1:
             max_display = f"{max_years}" if max_years < 99 else "+"
             range_display = f"{min_years}-{max_display}" if max_years < 99 else f"{min_years}+"
             return {
                 "verdict": "FIT",
-                "reason": f"JD states {range_display} yrs — within 0-2 yr range.",
+                "reason": f"JD states {range_display} yrs — within strict 0-1 yr range.",
                 "min_years": min_years,
                 "max_years": max_years,
             }
@@ -97,7 +113,20 @@ def classify_experience(description_text: str, seniority_label: str = None, titl
                 "max_years": max_years,
             }
 
-    # 2) No explicit year number found — fall back to LinkedIn's own label.
+    # 2) TITLE says senior/staff/principal/lead — reject immediately, don't
+    # wait on description quality. This is the fix for jobs like "Sr. Embedded
+    # Firmware Engineer" slipping through as STRETCH when LinkedIn's guest
+    # view returns a thin description with no year number in it.
+    if _SENIOR_TITLE_WORDS.search(title or ""):
+        matched_word = _SENIOR_TITLE_WORDS.search(title).group(0)
+        return {
+            "verdict": "REJECT",
+            "reason": f"Title contains '{matched_word}' — treating as senior regardless of JD text quality.",
+            "min_years": None,
+            "max_years": None,
+        }
+
+    # 3) No explicit year number, no senior title — fall back to LinkedIn's own label.
     if seniority_label:
         label = seniority_label.strip().lower()
         if label in _JUNIOR_SENIORITY_LABELS:
@@ -115,7 +144,7 @@ def classify_experience(description_text: str, seniority_label: str = None, titl
                 "max_years": None,
             }
 
-    # 3) Nothing explicit anywhere — weakest signal, use fresher-friendly wording.
+    # 4) Nothing explicit anywhere — weakest signal, use fresher-friendly wording.
     if _FRESHER_WORDS.search(text) or _FRESHER_WORDS.search(title):
         return {
             "verdict": "STRETCH",

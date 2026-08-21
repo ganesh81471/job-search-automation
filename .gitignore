@@ -2,3 +2,8 @@ venv/
 __pycache__/
 *.csv
 .env
+linkedin_session.json
+watched_posts_seen.json
+jobs.db
+last_scan_state.json
+debug_*.html
